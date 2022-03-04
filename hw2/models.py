@@ -7,7 +7,7 @@ from transformers import BertForSequenceClassification, pipeline
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering, AutoModelForSequenceClassification
 from transformers import TrainingArguments, Trainer
 # ADDED
-from datasets import load_metric
+from datasets import load_metric,concatenate_datasets 
 import numpy as np
 from transformers import default_data_collator, get_cosine_with_hard_restarts_schedule_with_warmup, AdamW,DataCollatorWithPadding
 from transformers import EarlyStoppingCallback
@@ -69,25 +69,59 @@ class ReRanker(BaseReRanker):
         Feel free to change and modify the signature of the method to suit your needs."""
         # create hugging face trainer
         #print(training_dataset[0])
-        def dataset_construction(training_dataset):
-            #print(training_dataset["train"][0])
-            flag=0
-            for i in training_dataset["train"]:
-                wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
-                i["text"]=i["text"]+wiki_text(i["page"])
-                #n=training_dataset["train"]
-                #count=count+1
-                i["label"]=flag-1
-                flag=1-flag
-            for i in training_dataset["eval"]:
-                wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
-                i["text"]=i["text"]+wiki_text(i["page"])
-                i["label"]=flag-1
-                flag=1-flag
-            return training_dataset
+        def dataset_construction(example):
+            wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
+            example['text'] = wiki_text(example['page'])+ example['text']
+            example['label']=1
+            return example
         def preprocess_function(examples):
             return self.tokenizer(examples["text"], truncation=True)
-        training_dataset=dataset_construction(training_dataset)
+        def generate (example):
+            """a=training_dataset["train"]
+            b=training_dataset["eval"]
+            if count>0:
+                example=a[count-1]
+                wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
+                example['text'] = wiki_text(example['page'])+ example['text']
+                example['label']=0
+            else:
+                example=a[0]
+                wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
+                example['text'] = wiki_text(example['page'])+ example['text']
+                example['label']=1
+            return example"""
+            wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
+            example['text'] = wiki_text(example['page'])+ example['text']
+            example['label']=1
+            return example
+        #training_dataset=dataset_construction(training_dataset)
+        #wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
+        #new_column = ["label"] * len(training_dataset)
+        #training_dataset = training_dataset.add_column("new_column", new_column)
+        #training_dataset=training_dataset.map(lambda example: {'sentence1': wiki_text(example["page"]) + example['text']})
+        training_dataset=training_dataset.map(dataset_construction)
+        second_dataset=training_dataset.map(generate)
+        """new_dataset = []
+        count=0
+        for example in (training_dataset["train"]):
+            new_dataset.append(example)
+            processed_example = generate(example,training_dataset["train"],count)
+            count=count+1
+            example.update(processed_example)
+            new_dataset.append(example)
+        training_dataset["train"]=new_dataset
+
+        new_dataset1 = []
+        count1=0
+        for example in (training_dataset["eval"]):
+            new_dataset.append(example)
+            processed_example = generate(example,training_dataset["eval"],count1)
+            count1=count1+1
+            example.update(processed_example)
+            new_dataset1.append(example)
+        training_dataset["eval"]=new_dataset1"""
+        #new_train=concatenate_datasets([training_dataset, second_dataset])
+        #new_eval=concatenate_datasets(training_dataset['train'], second_dataset['train'])
         print(training_dataset["train"][0])
         tokenized_dataset = training_dataset.map(preprocess_function, batched=True)
         data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
@@ -103,11 +137,19 @@ class ReRanker(BaseReRanker):
         trainer = Trainer(
             model=self.model,
             args=training_args,
-            train_dataset=tokenized_dataset["train"],
-            eval_dataset=tokenized_dataset["eval"],
+            train_dataset=training_dataset["train"],
+            eval_dataset=training_dataset["eval"],
             tokenizer=self.tokenizer,
             data_collator=data_collator,
         )
+        """trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=new_train["train"],
+            eval_dataset=new_train["eval"],
+            tokenizer=self.tokenizer,
+            data_collator=data_collator,
+        )"""
 
         trainer.train()
 
