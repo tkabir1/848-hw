@@ -11,12 +11,26 @@ from datasets import load_metric
 import numpy as np
 from transformers import default_data_collator, get_cosine_with_hard_restarts_schedule_with_warmup, AdamW,DataCollatorWithPadding
 from transformers import EarlyStoppingCallback
+from typing import List, Dict, Iterable, Optional, Tuple, NamedTuple
+import os
+import json
+
 # Change this based on the GPU you use on your machine
 device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 print( torch.cuda.is_available() )
 devices = [d for d in range(torch.cuda.device_count())]
 print( [torch.cuda.get_device_name(d) for d in devices] )
 
+
+class BuzzLookUp:
+    def __init__(self, filepath:str) -> None:
+        with open(filepath) as fp:
+            self.page_lookup = json.load(fp)
+    
+    def __getitem__(self, page):
+        """Return the page content as python dict with key `text`. 
+        If the page is not found, it only returns a human readable title of the page."""
+        return self.page_lookup.get(page, {'text': page.replace('_', ' ')})
 class Guesser(BaseGuesser):
     """You can implement your own Bert based Guesser here"""
     pass
@@ -55,18 +69,33 @@ class ReRanker(BaseReRanker):
         Feel free to change and modify the signature of the method to suit your needs."""
         # create hugging face trainer
         #print(training_dataset[0])
+        def dataset_construction(training_dataset):
+            #print(training_dataset["train"][0])
+            flag=0
+            for i in training_dataset["train"]:
+                wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
+                i["text"]=i["text"]+wiki_text(i["page"])
+                #n=training_dataset["train"]
+                #count=count+1
+                i["label"]=flag-1
+                flag=1-flag
+            for i in training_dataset["eval"]:
+                wiki_text=lambda x: wiki_lookup[ x ][ "text" ]
+                i["text"]=i["text"]+wiki_text(i["page"])
+                i["label"]=flag-1
+                flag=1-flag
+            return training_dataset
         def preprocess_function(examples):
-            print()
-            text=self.tokenizer(examples["text"], truncation=True)
-            answer=self.tokenizer(examples["answer"], truncation=True)
             return self.tokenizer(examples["text"], truncation=True)
+        training_dataset=dataset_construction(training_dataset)
+        print(training_dataset["train"][0])
         tokenized_dataset = training_dataset.map(preprocess_function, batched=True)
         data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
         training_args = TrainingArguments(
             output_dir="./results",
             #learning_rate=2e^-5,
-            per_device_train_batch_size=6,
-            per_device_eval_batch_size=6,
+            per_device_train_batch_size=4,
+            per_device_eval_batch_size=4,
             num_train_epochs=5,
             weight_decay=0.01,
         )
@@ -81,8 +110,6 @@ class ReRanker(BaseReRanker):
         )
 
         trainer.train()
-
-        pass
 
     def get_best_document(self, question: str, ref_texts: List[str]) -> int:
         """Selects the best reference text from a list of reference text for each question."""
